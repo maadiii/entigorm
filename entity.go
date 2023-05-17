@@ -25,6 +25,7 @@ type QueryMaker[E entity] interface {
 	Ascending() Entitier[E]
 	Descending() Entitier[E]
 	GroupBy(string) Entitier[E]
+	ToSQL() (string, []any)
 	Join(sql string, args []any) Entitier[E]
 }
 
@@ -144,6 +145,12 @@ func (e *Entity[E]) Having(whereClause *Clause) Entitier[E] {
 	e.transaction.db = e.transaction.db.Having(e.clause.ToSQL())
 
 	return e
+}
+
+func (e *Entity[E]) ToSQL() (string, []any) {
+	sql, args := e.clause.ToSQL()
+
+	return sql, args
 }
 
 func (e *Entity[E]) Join(sql string, args []any) Entitier[E] {
