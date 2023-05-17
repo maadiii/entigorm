@@ -16,8 +16,8 @@ type Entitier[E entity] interface {
 }
 
 type QueryMaker[E entity] interface {
-	Where(Clause) Entitier[E]
-	Having(Clause) Entitier[E]
+	Where(*Clause) Entitier[E]
+	Having(*Clause) Entitier[E]
 	Select(cols ...string) Entitier[E]
 	Offset(int) Entitier[E]
 	Limit(int) Entitier[E]
@@ -67,7 +67,7 @@ type Entity[E entity] struct {
 	transaction *transaction
 	error       error
 	entity      E
-	clause      Clause
+	clause      *Clause
 }
 
 func SQL[E entity](ent E) Entitier[E] {
@@ -83,7 +83,7 @@ func (e *Entity[E]) Select(cols ...string) Entitier[E] {
 	return e
 }
 
-func (e *Entity[E]) Where(whereClause Clause) Entitier[E] {
+func (e *Entity[E]) Where(whereClause *Clause) Entitier[E] {
 	e.transaction.db = e.transaction.db.Where(whereClause.ToSQL())
 
 	return e
@@ -139,7 +139,7 @@ func (e *Entity[E]) GroupBy(name string) Entitier[E] {
 	return e
 }
 
-func (e *Entity[E]) Having(whereClause Clause) Entitier[E] {
+func (e *Entity[E]) Having(whereClause *Clause) Entitier[E] {
 	e.clause = whereClause
 	e.transaction.db = e.transaction.db.Having(e.clause.ToSQL())
 

@@ -9,7 +9,7 @@ import (
 
 func TestClauser_EQ(t *testing.T) {
 	t.Run("field = ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.EQ("field", "value").ToSQL()
 
 		assert.Equal(t, "field = ?", clause)
@@ -17,7 +17,7 @@ func TestClauser_EQ(t *testing.T) {
 	})
 
 	t.Run("NOT field = ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().EQ("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field = ?", clause)
@@ -27,7 +27,7 @@ func TestClauser_EQ(t *testing.T) {
 
 func TestClauser_GT(t *testing.T) {
 	t.Run("field > ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.GT("field", "value").ToSQL()
 
 		assert.Equal(t, "field > ?", clause)
@@ -35,7 +35,7 @@ func TestClauser_GT(t *testing.T) {
 	})
 
 	t.Run("NOT field > ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().GT("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field > ?", clause)
@@ -43,7 +43,7 @@ func TestClauser_GT(t *testing.T) {
 	})
 
 	t.Run("field >= ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.GTE("field", "value").ToSQL()
 
 		assert.Equal(t, "field >= ?", clause)
@@ -51,7 +51,7 @@ func TestClauser_GT(t *testing.T) {
 	})
 
 	t.Run("NOT field ?= ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().GTE("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field >= ?", clause)
@@ -61,7 +61,7 @@ func TestClauser_GT(t *testing.T) {
 
 func TestClauser_LT(t *testing.T) {
 	t.Run("field < ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.LT("field", "value").ToSQL()
 
 		assert.Equal(t, "field < ?", clause)
@@ -69,7 +69,7 @@ func TestClauser_LT(t *testing.T) {
 	})
 
 	t.Run("NOT field < ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().LT("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field < ?", clause)
@@ -77,7 +77,7 @@ func TestClauser_LT(t *testing.T) {
 	})
 
 	t.Run("NOT field <= ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.LTE("field", "value").ToSQL()
 
 		assert.Equal(t, "field <= ?", clause)
@@ -85,7 +85,7 @@ func TestClauser_LT(t *testing.T) {
 	})
 
 	t.Run("NOT field <= ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().LTE("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field <= ?", clause)
@@ -95,7 +95,7 @@ func TestClauser_LT(t *testing.T) {
 
 func TestClauser_IN(t *testing.T) {
 	t.Run("IN", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.
 			IN("field", []any{"value1", "value2"}).
 			ToSQL()
@@ -105,7 +105,7 @@ func TestClauser_IN(t *testing.T) {
 	})
 
 	t.Run("NOT field IN ?", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
+		clauser := new(entigorm.Clause)
 		clause, args := clauser.NOT().GT("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field > ?", clause)
