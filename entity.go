@@ -8,7 +8,7 @@ import (
 	"gorm.io/gorm"
 )
 
-type Entity[E entity] interface {
+type Entitier[E entity] interface {
 	QueryMaker[E]
 	QueryConsumer[E]
 	RawExecutor[E]
@@ -16,16 +16,16 @@ type Entity[E entity] interface {
 }
 
 type QueryMaker[E entity] interface {
-	Where(Clause) Entity[E]
-	Having(Clause) Entity[E]
-	Select(cols ...string) Entity[E]
-	Offset(int) Entity[E]
-	Limit(int) Entity[E]
-	OrderBy(string) Entity[E]
-	Ascending() Entity[E]
-	Descending() Entity[E]
-	GroupBy(string) Entity[E]
-	Join(sql string, args []any) Entity[E]
+	Where(Clause) Entitier[E]
+	Having(Clause) Entitier[E]
+	Select(cols ...string) Entitier[E]
+	Offset(int) Entitier[E]
+	Limit(int) Entitier[E]
+	OrderBy(string) Entitier[E]
+	Ascending() Entitier[E]
+	Descending() Entitier[E]
+	GroupBy(string) Entitier[E]
+	Join(sql string, args []any) Entitier[E]
 }
 
 type QueryConsumer[E entity] interface {
@@ -44,7 +44,7 @@ type RawExecutor[E entity] interface {
 
 type Transactor[E entity] interface {
 	Tx() Transaction
-	SetTx(Transaction) Entity[E]
+	SetTx(Transaction) Entitier[E]
 }
 
 type entity interface {
@@ -63,40 +63,40 @@ type transaction struct {
 
 func (t *transaction) implement() {}
 
-type SQLEntity[E entity] struct {
+type Entity[E entity] struct {
 	transaction *transaction
 	error       error
 	entity      E
 	clause      Clause
 }
 
-func SQL[E entity](ent E) Entity[E] {
-	return &SQLEntity[E]{
+func SQL[E entity](ent E) Entitier[E] {
+	return &Entity[E]{
 		entity:      ent,
 		transaction: &transaction{db: db.Begin()},
 	}
 }
 
-func (e *SQLEntity[E]) Select(cols ...string) Entity[E] {
+func (e *Entity[E]) Select(cols ...string) Entitier[E] {
 	e.transaction.db = e.transaction.db.Select(cols)
 
 	return e
 }
 
-func (e *SQLEntity[E]) Where(whereClause Clause) Entity[E] {
+func (e *Entity[E]) Where(whereClause Clause) Entitier[E] {
 	e.transaction.db = e.transaction.db.Where(whereClause.ToSQL())
 
 	return e
 }
 
-func (e *SQLEntity[E]) OrderBy(name string) Entity[E] {
+func (e *Entity[E]) OrderBy(name string) Entitier[E] {
 	e.transaction.orderBy = name
 	e.transaction.db = e.transaction.db.Order(name)
 
 	return e
 }
 
-func (e *SQLEntity[E]) Ascending() Entity[E] {
+func (e *Entity[E]) Ascending() Entitier[E] {
 	if len(e.transaction.orderBy) == 0 {
 		panic("call OrderBy before Ascending")
 	}
@@ -106,7 +106,7 @@ func (e *SQLEntity[E]) Ascending() Entity[E] {
 	return e
 }
 
-func (e *SQLEntity[E]) Descending() Entity[E] {
+func (e *Entity[E]) Descending() Entitier[E] {
 	if len(e.transaction.orderBy) == 0 {
 		panic("call OrderBy before Descending")
 	}
@@ -121,38 +121,38 @@ func (e *SQLEntity[E]) Descending() Entity[E] {
 	return e
 }
 
-func (e *SQLEntity[E]) Offset(value int) Entity[E] {
+func (e *Entity[E]) Offset(value int) Entitier[E] {
 	e.transaction.db = e.transaction.db.Offset(value)
 
 	return e
 }
 
-func (e *SQLEntity[E]) Limit(value int) Entity[E] {
+func (e *Entity[E]) Limit(value int) Entitier[E] {
 	e.transaction.db = e.transaction.db.Limit(value)
 
 	return e
 }
 
-func (e *SQLEntity[E]) GroupBy(name string) Entity[E] {
+func (e *Entity[E]) GroupBy(name string) Entitier[E] {
 	e.transaction.db = e.transaction.db.Group(name)
 
 	return e
 }
 
-func (e *SQLEntity[E]) Having(whereClause Clause) Entity[E] {
+func (e *Entity[E]) Having(whereClause Clause) Entitier[E] {
 	e.clause = whereClause
 	e.transaction.db = e.transaction.db.Having(e.clause.ToSQL())
 
 	return e
 }
 
-func (e *SQLEntity[E]) Join(sql string, args []any) Entity[E] {
+func (e *Entity[E]) Join(sql string, args []any) Entitier[E] {
 	e.transaction.db = e.transaction.db.Joins(sql, args...)
 
 	return e
 }
 
-func (e *SQLEntity[E]) Find(ctx context.Context) ([]E, error) {
+func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 	result := make([]E, 0)
 
 	err := e.transaction.db.
@@ -166,7 +166,7 @@ func (e *SQLEntity[E]) Find(ctx context.Context) ([]E, error) {
 	return result, err
 }
 
-func (e *SQLEntity[E]) One(ctx context.Context) error {
+func (e *Entity[E]) One(ctx context.Context) error {
 	err := e.transaction.db.
 		WithContext(ctx).
 		First(&e.entity).
@@ -178,7 +178,7 @@ func (e *SQLEntity[E]) One(ctx context.Context) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) Insert(ctx context.Context, commit bool) error {
+func (e *Entity[E]) Insert(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
 		Create(&e.entity).
@@ -196,7 +196,7 @@ func (e *SQLEntity[E]) Insert(ctx context.Context, commit bool) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) Update(ctx context.Context, commit bool) error {
+func (e *Entity[E]) Update(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
 		Updates(&e.entity).
@@ -214,7 +214,7 @@ func (e *SQLEntity[E]) Update(ctx context.Context, commit bool) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) Delete(ctx context.Context, commit bool) error {
+func (e *Entity[E]) Delete(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
 		Delete(&e.entity).
@@ -232,7 +232,7 @@ func (e *SQLEntity[E]) Delete(ctx context.Context, commit bool) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) SetTx(db Transaction) Entity[E] {
+func (e *Entity[E]) SetTx(db Transaction) Entitier[E] {
 	if e.transaction.db != nil {
 		panic("must call SetTx before every method")
 	}
@@ -242,11 +242,11 @@ func (e *SQLEntity[E]) SetTx(db Transaction) Entity[E] {
 	return e
 }
 
-func (e *SQLEntity[E]) Tx() Transaction {
+func (e *Entity[E]) Tx() Transaction {
 	return e.transaction
 }
 
-func (e *SQLEntity[E]) Query(sql string, values ...any) error {
+func (e *Entity[E]) Query(sql string, values ...any) error {
 	err := e.transaction.db.
 		Raw(sql, values...).
 		Scan(&e.entity).Error
@@ -257,7 +257,7 @@ func (e *SQLEntity[E]) Query(sql string, values ...any) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) QueryRows(sql string, values ...any) ([]E, error) {
+func (e *Entity[E]) QueryRows(sql string, values ...any) ([]E, error) {
 	result := make([]E, 0)
 
 	err := e.transaction.db.
@@ -270,7 +270,7 @@ func (e *SQLEntity[E]) QueryRows(sql string, values ...any) ([]E, error) {
 	return result, nil
 }
 
-func (e *SQLEntity[E]) Exec(sql string, values ...any) error {
+func (e *Entity[E]) Exec(sql string, values ...any) error {
 	err := e.transaction.db.Exec(sql, values...).Error
 	if err != nil {
 		return e.joinError(err)
@@ -279,7 +279,7 @@ func (e *SQLEntity[E]) Exec(sql string, values ...any) error {
 	return nil
 }
 
-func (e *SQLEntity[E]) commit() error {
+func (e *Entity[E]) commit() error {
 	err := e.transaction.db.Commit().Error
 	if err != nil {
 		return e.joinError(err)
@@ -288,7 +288,7 @@ func (e *SQLEntity[E]) commit() error {
 	return nil
 }
 
-func (e *SQLEntity[E]) rollback() error {
+func (e *Entity[E]) rollback() error {
 	if len(e.transaction.savePoint) > 0 {
 		err := e.transaction.db.RollbackTo(e.transaction.savePoint).Error
 
@@ -300,7 +300,7 @@ func (e *SQLEntity[E]) rollback() error {
 	return e.joinError(err)
 }
 
-func (e *SQLEntity[E]) joinError(err error) error {
+func (e *Entity[E]) joinError(err error) error {
 	if errors.Unwrap(e.error) != nil {
 		return errors.Join(e.error, err)
 	}
