@@ -50,7 +50,7 @@ func TestClauser_GT(t *testing.T) {
 		assert.Len(t, args, 1)
 	})
 
-	t.Run("not greater and equal", func(t *testing.T) {
+	t.Run("NOT field ?= ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.NOT().GTE("field", "value").ToSQL()
 
@@ -60,7 +60,7 @@ func TestClauser_GT(t *testing.T) {
 }
 
 func TestClauser_LT(t *testing.T) {
-	t.Run("lesser", func(t *testing.T) {
+	t.Run("field < ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.LT("field", "value").ToSQL()
 
@@ -68,7 +68,7 @@ func TestClauser_LT(t *testing.T) {
 		assert.Len(t, args, 1)
 	})
 
-	t.Run("not lesser", func(t *testing.T) {
+	t.Run("NOT field < ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.NOT().LT("field", "value").ToSQL()
 
@@ -76,7 +76,7 @@ func TestClauser_LT(t *testing.T) {
 		assert.Len(t, args, 1)
 	})
 
-	t.Run("lesser and equal", func(t *testing.T) {
+	t.Run("NOT field <= ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.LTE("field", "value").ToSQL()
 
@@ -84,7 +84,7 @@ func TestClauser_LT(t *testing.T) {
 		assert.Len(t, args, 1)
 	})
 
-	t.Run("not lesser and equal", func(t *testing.T) {
+	t.Run("NOT field <= ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.NOT().LTE("field", "value").ToSQL()
 
@@ -104,27 +104,11 @@ func TestClauser_IN(t *testing.T) {
 		assert.Len(t, args, 1)
 	})
 
-	t.Run("not greater", func(t *testing.T) {
+	t.Run("NOT field IN ?", func(t *testing.T) {
 		clauser := new(entigorm.Clauser)
 		clause, args := clauser.NOT().GT("field", "value").ToSQL()
 
 		assert.Equal(t, "NOT field > ?", clause)
-		assert.Len(t, args, 1)
-	})
-
-	t.Run("greater and equal", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
-		clause, args := clauser.GTE("field", "value").ToSQL()
-
-		assert.Equal(t, "field >= ?", clause)
-		assert.Len(t, args, 1)
-	})
-
-	t.Run("not greater and equal", func(t *testing.T) {
-		clauser := new(entigorm.Clauser)
-		clause, args := clauser.NOT().GTE("field", "value").ToSQL()
-
-		assert.Equal(t, "NOT field >= ?", clause)
 		assert.Len(t, args, 1)
 	})
 }
