@@ -26,7 +26,7 @@ type QueryMaker[E entity] interface {
 	Descending() Entitier[E]
 	GroupBy(string) Entitier[E]
 	ToSQL() (string, []any)
-	Join(*Entity[E]) Entitier[E]
+	Join(sql string, args []any) Entitier[E]
 }
 
 type QueryConsumer[E entity] interface {
@@ -148,18 +148,17 @@ func (e *Entity[E]) Having(whereClause *Clause) Entitier[E] {
 }
 
 func (e *Entity[E]) ToSQL() (string, []any) {
+	if e.clause == nil {
+		return e.table.TableName(), nil
+	}
+
 	sql, args := e.clause.ToSQL()
 
 	return sql, args
 }
 
-func (e *Entity[E]) Join(entity *Entity[E]) Entitier[E] {
-	if entity.clause == nil {
-		e.transaction.db = e.transaction.db.Preload(entity.table.TableName())
-	} else {
-		sql, args := entity.clause.ToSQL()
-		e.transaction.db = e.transaction.db.Preload(entity.table.TableName(), sql, args)
-	}
+func (e *Entity[E]) Join(sql string, args []any) Entitier[E] {
+	e.transaction.db = e.transaction.db.Joins(sql, args...)
 
 	return e
 }
