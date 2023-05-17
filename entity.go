@@ -26,7 +26,7 @@ type QueryMaker[E entity] interface {
 	Descending() Entitier[E]
 	GroupBy(string) Entitier[E]
 	ToSQL() (string, []any)
-	Join(sql string, args []any) Entitier[E]
+	Join(*Entity[E]) Entitier[E]
 }
 
 type QueryConsumer[E entity] interface {
@@ -49,7 +49,7 @@ type Transactor[E entity] interface {
 }
 
 type entity interface {
-	Table() string
+	TableName() string
 }
 
 type Transaction interface {
@@ -67,13 +67,13 @@ func (t *transaction) implement() {}
 type Entity[E entity] struct {
 	transaction *transaction
 	error       error
-	entity      E
+	table       E
 	clause      *Clause
 }
 
 func SQL[E entity](ent E) Entitier[E] {
 	return &Entity[E]{
-		entity:      ent,
+		table:       ent,
 		transaction: &transaction{db: db.Begin()},
 	}
 }
@@ -153,8 +153,13 @@ func (e *Entity[E]) ToSQL() (string, []any) {
 	return sql, args
 }
 
-func (e *Entity[E]) Join(sql string, args []any) Entitier[E] {
-	e.transaction.db = e.transaction.db.Joins(sql, args...)
+func (e *Entity[E]) Join(entity *Entity[E]) Entitier[E] {
+	if entity.clause == nil {
+		e.transaction.db = e.transaction.db.Preload(entity.table.TableName())
+	} else {
+		sql, args := entity.clause.ToSQL()
+		e.transaction.db = e.transaction.db.Preload(entity.table.TableName(), sql, args)
+	}
 
 	return e
 }
@@ -176,7 +181,7 @@ func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 func (e *Entity[E]) One(ctx context.Context) error {
 	err := e.transaction.db.
 		WithContext(ctx).
-		First(&e.entity).
+		First(&e.table).
 		Error
 	if err != nil {
 		return e.joinError(err)
@@ -188,7 +193,7 @@ func (e *Entity[E]) One(ctx context.Context) error {
 func (e *Entity[E]) Insert(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
-		Create(&e.entity).
+		Create(&e.table).
 		Error
 	if err != nil {
 		e.error = err
@@ -206,7 +211,7 @@ func (e *Entity[E]) Insert(ctx context.Context, commit bool) error {
 func (e *Entity[E]) Update(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
-		Updates(&e.entity).
+		Updates(&e.table).
 		Error
 	if err != nil {
 		e.error = err
@@ -224,7 +229,7 @@ func (e *Entity[E]) Update(ctx context.Context, commit bool) error {
 func (e *Entity[E]) Delete(ctx context.Context, commit bool) error {
 	err := e.transaction.db.
 		WithContext(ctx).
-		Delete(&e.entity).
+		Delete(&e.table).
 		Error
 	if err != nil {
 		e.error = err
@@ -256,7 +261,7 @@ func (e *Entity[E]) Tx() Transaction {
 func (e *Entity[E]) Query(sql string, values ...any) error {
 	err := e.transaction.db.
 		Raw(sql, values...).
-		Scan(&e.entity).Error
+		Scan(&e.table).Error
 	if err != nil {
 		return e.joinError(err)
 	}
