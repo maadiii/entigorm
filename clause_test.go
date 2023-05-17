@@ -3,7 +3,7 @@ package entigorm_test
 import (
 	"testing"
 
-	"entigorm"
+	"github.com/maadiii/entigorm"
 	"github.com/stretchr/testify/assert"
 )
 

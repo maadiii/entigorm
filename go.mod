@@ -1,4 +1,4 @@
-module entigorm
+module github.com/maadiii/entigorm
 
 go 1.20
 
