@@ -3,6 +3,7 @@ package entigorm
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 
 	"gorm.io/gorm"
@@ -25,13 +26,14 @@ type QueryMaker[E entity] interface {
 	Ascending() Entitier[E]
 	Descending() Entitier[E]
 	GroupBy(string) Entitier[E]
-	ToSQL() (string, []any)
-	Join(sql string, args []any) Entitier[E]
+	ToSQL() []any
+	IsMany() Entitier[E]
+	Join([]any) Entitier[E]
 }
 
 type QueryConsumer[E entity] interface {
 	Find(context.Context) ([]E, error)
-	One(context.Context) error
+	One(context.Context) (E, error)
 	Insert(ctx context.Context, commit bool) error
 	Update(ctx context.Context, commit bool) error
 	Delete(ctx context.Context, commit bool) error
@@ -69,23 +71,29 @@ type Entity[E entity] struct {
 	error       error
 	table       E
 	clause      *Clause
+	hasMany     bool
 }
 
 func SQL[E entity](ent E) Entitier[E] {
 	return &Entity[E]{
 		table:       ent,
 		transaction: &transaction{db: db.Begin()},
+		clause:      &Clause{builder: make([]Builer, 0)},
 	}
 }
 
 func (e *Entity[E]) Select(cols ...string) Entitier[E] {
-	e.transaction.db = e.transaction.db.Select(cols)
+	if len(cols) > 1 {
+		e.transaction.db = e.transaction.db.Select(cols)
+	} else {
+		e.transaction.db = e.transaction.db.Select(cols[0], cols[1:])
+	}
 
 	return e
 }
 
 func (e *Entity[E]) Where(whereClause *Clause) Entitier[E] {
-	e.transaction.db = e.transaction.db.Where(whereClause.ToSQL())
+	e.clause = whereClause
 
 	return e
 }
@@ -147,18 +155,56 @@ func (e *Entity[E]) Having(whereClause *Clause) Entitier[E] {
 	return e
 }
 
-func (e *Entity[E]) ToSQL() (string, []any) {
-	if e.clause == nil {
-		return e.table.TableName(), nil
-	}
+func (e *Entity[E]) IsMany() Entitier[E] {
+	e.hasMany = true
 
-	sql, args := e.clause.ToSQL()
-
-	return sql, args
+	return e
 }
 
-func (e *Entity[E]) Join(sql string, args []any) Entitier[E] {
-	e.transaction.db = e.transaction.db.Joins(sql, args...)
+func (e *Entity[E]) ToSQL() []any {
+	var table string
+	if e.hasMany {
+		table = strings.Title(e.table.TableName())
+	} else {
+		table = reflect.ValueOf(e.table).Elem().Type().Name()
+	}
+	args := []any{table}
+
+	if len(e.clause.ToSQL()) > 1 {
+		args = append(args, e.clause.ToSQL()...)
+	}
+
+	return args
+}
+
+func (e *Entity[E]) Join(args []any) Entitier[E] {
+	table := args[0].(string)
+
+	if len(args) > 1 {
+		query := args[1].(string)
+		splited := strings.Split(query, " = ")
+
+		var splitedStmt []string
+		for _, s := range splited {
+			words := strings.Split(s, " ")
+			for _, word := range words {
+				if len(word) > 0 {
+					splitedStmt = append(splitedStmt, word)
+				}
+			}
+		}
+
+		for i := 1; i < len(splitedStmt); i++ {
+			if splitedStmt[i] == "?" {
+				splitedStmt[i-1] = table + "." + splitedStmt[i-1] + " ="
+			}
+		}
+
+		stmt := strings.Join(splitedStmt, " ")
+		e.transaction.db = e.transaction.db.Joins(table, db.Where(stmt, args[2:]))
+	} else {
+		e.transaction.db = e.transaction.db.Preload(table)
+	}
 
 	return e
 }
@@ -177,16 +223,17 @@ func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 	return result, err
 }
 
-func (e *Entity[E]) One(ctx context.Context) error {
+func (e *Entity[E]) One(ctx context.Context) (E, error) {
+	var result E
+
 	err := e.transaction.db.
-		WithContext(ctx).
-		First(&e.table).
+		Find(&result, e.clause.ToSQL()...).
 		Error
 	if err != nil {
-		return e.joinError(err)
+		return result, e.joinError(err)
 	}
 
-	return nil
+	return result, nil
 }
 
 func (e *Entity[E]) Insert(ctx context.Context, commit bool) error {

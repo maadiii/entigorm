@@ -122,12 +122,8 @@ func (w *Clause) NOT() *Clause {
 	return w
 }
 
-func (w *Clause) ToSQL() (string, []any) {
-	args := make([]any, len(w.builder))
-
-	for i, clause := range w.builder {
-		args[i] = clause.value
-	}
+func (w *Clause) ToSQL() []any {
+	args := make([]any, 1)
 
 	var where string
 	for _, clause := range w.builder {
@@ -136,9 +132,11 @@ func (w *Clause) ToSQL() (string, []any) {
 		if len(clause.nextBoolOP) > 0 {
 			where += " " + clause.nextBoolOP
 		}
+		args = append(args, clause.value)
 	}
 
-	return where, args
+	args[0] = where
+	return args
 }
 
 func EQ(field string, value any) *Clause {
