@@ -22,9 +22,7 @@ type QueryMaker[E entity] interface {
 	Select(cols ...string) Entitier[E]
 	Offset(int) Entitier[E]
 	Limit(int) Entitier[E]
-	OrderBy(string) Entitier[E]
-	Ascending() Entitier[E]
-	Descending() Entitier[E]
+	OrderBy(name string, desc bool) Entitier[E]
 	GroupBy(string) Entitier[E]
 	ToSQL() []any
 	IsMany() Entitier[E]
@@ -34,9 +32,9 @@ type QueryMaker[E entity] interface {
 type QueryConsumer[E entity] interface {
 	Find(context.Context) ([]E, error)
 	One(context.Context) (E, error)
-	Insert(ctx context.Context, commit bool) error
-	Update(ctx context.Context, commit bool) error
-	Delete(ctx context.Context, commit bool) error
+	Insert(ctx context.Context) (Transaction, error)
+	Update(ctx context.Context) (Transaction, error)
+	Delete(ctx context.Context) (Transaction, error)
 }
 
 type RawExecutor[E entity] interface {
@@ -46,8 +44,9 @@ type RawExecutor[E entity] interface {
 }
 
 type Transactor[E entity] interface {
-	Tx() Transaction
+	Begin() Entitier[E]
 	SetTx(Transaction) Entitier[E]
+	Commit() Entitier[E]
 }
 
 type entity interface {
@@ -59,9 +58,10 @@ type Transaction interface {
 }
 
 type transaction struct {
-	db        *gorm.DB
+	scopes    []func(*gorm.DB) *gorm.DB
+	tx        *gorm.DB
+	commit    bool
 	savePoint string
-	orderBy   string
 }
 
 func (t *transaction) implement() {}
@@ -77,16 +77,26 @@ type Entity[E entity] struct {
 func SQL[E entity](ent E) Entitier[E] {
 	return &Entity[E]{
 		table:       ent,
-		transaction: &transaction{db: db.Begin()},
+		transaction: &transaction{scopes: make([]func(*gorm.DB) *gorm.DB, 0)},
 		clause:      &Clause{builder: make([]Builer, 0)},
 	}
 }
 
 func (e *Entity[E]) Select(cols ...string) Entitier[E] {
 	if len(cols) > 1 {
-		e.transaction.db = e.transaction.db.Select(cols)
+		e.transaction.scopes = append(
+			e.transaction.scopes,
+			func(db *gorm.DB) *gorm.DB {
+				return db.Select(cols)
+			},
+		)
 	} else {
-		e.transaction.db = e.transaction.db.Select(cols[0], cols[1:])
+		e.transaction.scopes = append(
+			e.transaction.scopes,
+			func(db *gorm.DB) *gorm.DB {
+				return db.Select(cols[0], cols[1])
+			},
+		)
 	}
 
 	return e
@@ -94,63 +104,81 @@ func (e *Entity[E]) Select(cols ...string) Entitier[E] {
 
 func (e *Entity[E]) Where(whereClause *Clause) Entitier[E] {
 	e.clause = whereClause
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			args := whereClause.ToSQL()
+			if len(args) > 1 {
+				return db.Where(args[0], args[1:]...)
+			}
 
-	return e
-}
+			if len(args) > 0 {
+				return db.Where(args[0])
+			}
 
-func (e *Entity[E]) OrderBy(name string) Entitier[E] {
-	e.transaction.orderBy = name
-	e.transaction.db = e.transaction.db.Order(name)
-
-	return e
-}
-
-func (e *Entity[E]) Ascending() Entitier[E] {
-	if len(e.transaction.orderBy) == 0 {
-		panic("call OrderBy before Ascending")
-	}
-
-	e.transaction.db = e.transaction.db.Order(e.transaction.orderBy + ASCOperator)
-
-	return e
-}
-
-func (e *Entity[E]) Descending() Entitier[E] {
-	if len(e.transaction.orderBy) == 0 {
-		panic("call OrderBy before Descending")
-	}
-
-	e.transaction.orderBy, _ = strings.CutSuffix(
-		e.transaction.orderBy,
-		ASCOperator,
+			return nil
+		},
 	)
 
-	e.transaction.db = e.transaction.db.Order(e.transaction.orderBy + DESCOperator)
+	return e
+}
+
+func (e *Entity[E]) OrderBy(name string, ascending bool) Entitier[E] {
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			if ascending {
+				return db.Order(name + " ASC ")
+			}
+
+			return db.Order(name + " DESC ")
+		},
+	)
 
 	return e
 }
 
 func (e *Entity[E]) Offset(value int) Entitier[E] {
-	e.transaction.db = e.transaction.db.Offset(value)
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			return db.Offset(value)
+		},
+	)
 
 	return e
 }
 
 func (e *Entity[E]) Limit(value int) Entitier[E] {
-	e.transaction.db = e.transaction.db.Limit(value)
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			return db.Limit(value)
+		},
+	)
 
 	return e
 }
 
 func (e *Entity[E]) GroupBy(name string) Entitier[E] {
-	e.transaction.db = e.transaction.db.Group(name)
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			return db.Group(name)
+		},
+	)
 
 	return e
 }
 
 func (e *Entity[E]) Having(whereClause *Clause) Entitier[E] {
 	e.clause = whereClause
-	e.transaction.db = e.transaction.db.Having(e.clause.ToSQL())
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			return db.Having(e.clause.ToSQL())
+		},
+	)
 
 	return e
 }
@@ -201,9 +229,19 @@ func (e *Entity[E]) Join(args []any) Entitier[E] {
 		}
 
 		stmt := strings.Join(splitedStmt, " ")
-		e.transaction.db = e.transaction.db.Joins(table, db.Where(stmt, args[2:]))
+		e.transaction.scopes = append(
+			e.transaction.scopes,
+			func(db *gorm.DB) *gorm.DB {
+				return db.Joins(table, db.Where(stmt, args[2:]))
+			},
+		)
 	} else {
-		e.transaction.db = e.transaction.db.Preload(table)
+		e.transaction.scopes = append(
+			e.transaction.scopes,
+			func(db *gorm.DB) *gorm.DB {
+				return db.Preload(table)
+			},
+		)
 	}
 
 	return e
@@ -212,10 +250,7 @@ func (e *Entity[E]) Join(args []any) Entitier[E] {
 func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 	result := make([]E, 0)
 
-	err := e.transaction.db.
-		WithContext(ctx).
-		Find(&result).
-		Error
+	err := db.Scopes(e.transaction.scopes...).Find(&result).Error
 	if err != nil {
 		return nil, e.joinError(err)
 	}
@@ -226,9 +261,7 @@ func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 func (e *Entity[E]) One(ctx context.Context) (E, error) {
 	var result E
 
-	err := e.transaction.db.
-		Find(&result, e.clause.ToSQL()...).
-		Error
+	err := db.Scopes(e.transaction.scopes...).Find(&result).Error
 	if err != nil {
 		return result, e.joinError(err)
 	}
@@ -236,78 +269,77 @@ func (e *Entity[E]) One(ctx context.Context) (E, error) {
 	return result, nil
 }
 
-func (e *Entity[E]) Insert(ctx context.Context, commit bool) error {
-	err := e.transaction.db.
-		WithContext(ctx).
-		Create(&e.table).
-		Error
-	if err != nil {
-		e.error = err
-
-		return e.joinError(e.rollback())
+func (e *Entity[E]) Insert(ctx context.Context) (tx Transaction, err error) {
+	if e.transaction.tx != nil {
+		return e.txInsert(ctx)
 	}
 
-	if commit {
-		return e.commit()
-	}
-
-	return nil
+	return nil, db.Create(e.table).Error
 }
 
-func (e *Entity[E]) Update(ctx context.Context, commit bool) error {
-	err := e.transaction.db.
-		WithContext(ctx).
-		Updates(&e.table).
-		Error
+func (e Entity[E]) txInsert(ctx context.Context) (tx Transaction, err error) {
+	err = e.transaction.tx.Create(e.table).Error
 	if err != nil {
-		e.error = err
-
-		return e.joinError(e.rollback())
+		return e.rollback(err)
 	}
 
-	if commit {
-		return e.commit()
-	}
-
-	return nil
+	return e.commit()
 }
 
-func (e *Entity[E]) Delete(ctx context.Context, commit bool) error {
-	err := e.transaction.db.
-		WithContext(ctx).
-		Delete(&e.table).
-		Error
-	if err != nil {
-		e.error = err
-
-		return e.joinError(e.rollback())
+func (e *Entity[E]) Update(ctx context.Context) (tx Transaction, err error) {
+	if e.transaction.tx != nil {
+		return e.txUpdate(ctx)
 	}
 
-	if commit {
-		return e.commit()
-	}
-
-	return nil
+	return nil, db.Scopes(e.transaction.scopes...).Updates(e.table).Error
 }
 
-func (e *Entity[E]) SetTx(db Transaction) Entitier[E] {
-	if e.transaction.db != nil {
-		panic("must call SetTx before every method")
+func (e *Entity[E]) txUpdate(ctx context.Context) (tx Transaction, err error) {
+	err = e.transaction.tx.Scopes(e.transaction.scopes...).Updates(e.table).Error
+	if err != nil {
+		return e.rollback(err)
 	}
 
-	e.transaction.db = db.(*transaction).db
+	return e.commit()
+}
+
+func (e *Entity[E]) Delete(ctx context.Context) (tx Transaction, err error) {
+	if e.transaction.tx != nil {
+		return e.txDelete(ctx)
+	}
+
+	return nil, db.Scopes(e.transaction.scopes...).Delete(e.table).Error
+}
+
+func (e *Entity[E]) txDelete(ctx context.Context) (tx Transaction, err error) {
+	err = e.transaction.tx.Scopes(e.transaction.scopes...).Delete(e.table).Error
+	if err != nil {
+		return e.rollback(err)
+	}
+
+	return e.commit()
+}
+
+func (e *Entity[E]) Begin() Entitier[E] {
+	e.transaction.tx = db.Begin()
 
 	return e
 }
 
-func (e *Entity[E]) Tx() Transaction {
-	return e.transaction
+func (e *Entity[E]) Commit() Entitier[E] {
+	e.transaction.commit = true
+
+	return e
+}
+
+func (e *Entity[E]) SetTx(tx Transaction) Entitier[E] {
+	e.transaction.tx = tx.(*transaction).tx
+
+	return e
 }
 
 func (e *Entity[E]) Query(sql string, values ...any) error {
-	err := e.transaction.db.
-		Raw(sql, values...).
-		Scan(&e.table).Error
+	err := db.Scopes(e.transaction.scopes...).Raw(sql, values...).Scan(&e.table).Error
 	if err != nil {
 		return e.joinError(err)
 	}
@@ -318,9 +350,7 @@ func (e *Entity[E]) Query(sql string, values ...any) error {
 func (e *Entity[E]) QueryRows(sql string, values ...any) ([]E, error) {
 	result := make([]E, 0)
 
-	err := e.transaction.db.
-		Raw(sql, values...).
-		Scan(&result).Error
+	err := db.Scopes(e.transaction.scopes...).Raw(sql, values...).Scan(&e.table).Error
 	if err != nil {
 		return nil, e.joinError(err)
 	}
@@ -329,7 +359,7 @@ func (e *Entity[E]) QueryRows(sql string, values ...any) ([]E, error) {
 }
 
 func (e *Entity[E]) Exec(sql string, values ...any) error {
-	err := e.transaction.db.Exec(sql, values...).Error
+	err := db.Scopes(e.transaction.scopes...).Exec(sql, values...).Error
 	if err != nil {
 		return e.joinError(err)
 	}
@@ -337,25 +367,31 @@ func (e *Entity[E]) Exec(sql string, values ...any) error {
 	return nil
 }
 
-func (e *Entity[E]) commit() error {
-	err := e.transaction.db.Commit().Error
-	if err != nil {
-		return e.joinError(err)
+func (e *Entity[E]) commit() (tx Transaction, err error) {
+	if e.transaction.commit {
+		return e.transaction, e.transaction.tx.Commit().Error
 	}
 
-	return nil
+	return e.transaction, nil
 }
 
-func (e *Entity[E]) rollback() error {
+func (e *Entity[E]) rollback(err error) (Transaction, error) {
 	if len(e.transaction.savePoint) > 0 {
-		err := e.transaction.db.RollbackTo(e.transaction.savePoint).Error
+		rErr := e.transaction.tx.RollbackTo(e.transaction.savePoint).Error
+		if rErr != nil {
+			e.error = rErr
+		}
 
-		return e.joinError(err)
+		return nil, e.joinError(err)
 	}
 
-	err := e.transaction.db.Rollback().Error
+	rErr := e.transaction.tx.Rollback().Error
+	if rErr != nil {
+		e.error = rErr
+		return nil, e.joinError(err)
+	}
 
-	return e.joinError(err)
+	return e.transaction, nil
 }
 
 func (e *Entity[E]) joinError(err error) error {
