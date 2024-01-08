@@ -2,6 +2,8 @@ package entigorm
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 )
 
 type Builer struct {
@@ -71,12 +73,15 @@ func (w *Clause) LTE(field string, value any) *Clause {
 	return w
 }
 
-func (w *Clause) IN(field string, values []any) *Clause {
+// NOTE: Because of golang limition in array of any([]any)
+// IN function used any type for values parameter instead of []any,
+// developers must call IN function with array of any.
+func (w *Clause) IN(field string, values any) *Clause {
 	if w.not {
 		field = NOTOperator + field
 	}
 
-	w.builder = append(w.builder, IN(field, values...).builder...)
+	w.builder = append(w.builder, IN(field, values).builder...)
 	w.not = false
 
 	return w
@@ -122,20 +127,35 @@ func (w *Clause) NOT() *Clause {
 	return w
 }
 
+func (w *Clause) Search(fields []string, value, operator string) *Clause {
+	w.builder = append(w.builder, Search(fields, value, operator).builder...)
+
+	return w
+}
+
 func (w *Clause) ToSQL() []any {
 	args := make([]any, 1)
 
 	var where string
+
 	for _, clause := range w.builder {
-		where += fmt.Sprintf("%s %s ?", clause.key, clause.operator)
+		if len(clause.operator) > 0 {
+			where += fmt.Sprintf("%s %s ?", clause.key, clause.operator)
+		} else {
+			where += fmt.Sprintf("%s %s", clause.key, clause.operator)
+		}
 
 		if len(clause.nextBoolOP) > 0 {
-			where += " " + clause.nextBoolOP
+			where += clause.nextBoolOP
 		}
-		args = append(args, clause.value)
+
+		if clause.value != nil {
+			args = append(args, clause.value) //nolint
+		}
 	}
 
 	args[0] = where
+
 	return args
 }
 
@@ -167,7 +187,10 @@ func Like(field, value string) *Clause {
 	return makeWhereClause(LikeOperator, field, value)
 }
 
-func IN(field string, values ...any) *Clause {
+// NOTE: Because of golang limition in array of any([]any)
+// IN function used any type for values parameter instead of []any,
+// developers must call IN function with array of any.
+func IN(field string, values any) *Clause {
 	return makeWhereClause(INOperator, field, values)
 }
 
@@ -175,6 +198,10 @@ func NOT() *Clause {
 	return &Clause{
 		not: true,
 	}
+}
+
+func Search(fields []string, value, operator string) *Clause {
+	return makeWhereClause("", generateTextSearch(fields, value, operator), nil)
 }
 
 func makeWhereClause(operator, field string, value any) *Clause {
@@ -187,6 +214,30 @@ func makeWhereClause(operator, field string, value any) *Clause {
 			},
 		},
 	}
+}
+
+func generateTextSearch(columns []string, input, operator string) (res string) {
+	input = removeMultipleSpace(input)
+	input = strings.TrimSpace(input)
+
+	words := strings.Split(input, " ")
+	for i := 0; i < len(words); i++ {
+		words[i] += ":*"
+	}
+
+	res = "to_tsvector("
+	res += strings.Join(columns, " ||' '|| ")
+	res += ") @@ to_tsquery('"
+	res += strings.Join(words, fmt.Sprintf(" %s ", operator))
+	res += "')"
+
+	return
+}
+
+func removeMultipleSpace(input string) string {
+	space := regexp.MustCompile(`\s+`)
+
+	return space.ReplaceAllString(input, " ")
 }
 
 const (

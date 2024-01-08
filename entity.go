@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 	"gorm.io/gorm"
 )
 
@@ -13,7 +15,8 @@ type Entitier[E entity] interface {
 	QueryMaker[E]
 	QueryConsumer[E]
 	RawExecutor[E]
-	Transactor[E]
+
+	SetTx(tx Transaction, commit bool) Entitier[E]
 }
 
 type QueryMaker[E entity] interface {
@@ -26,15 +29,22 @@ type QueryMaker[E entity] interface {
 	GroupBy(string) Entitier[E]
 	ToSQL() []any
 	IsMany() Entitier[E]
-	Join([]any) Entitier[E]
+	Join(any) Entitier[E]
 }
 
 type QueryConsumer[E entity] interface {
 	Find(context.Context) ([]E, error)
 	One(context.Context) (E, error)
-	Insert(ctx context.Context) (Transaction, error)
-	Update(ctx context.Context) (Transaction, error)
-	Delete(ctx context.Context) (Transaction, error)
+	Count(context.Context) (int64, error)
+
+	Insert(context.Context) error
+	InsertBatch(context.Context, []E) error
+	Update(context.Context) error
+	Delete(context.Context) error
+
+	InsertTx(context.Context) (Transaction, error)
+	UpdateTx(context.Context) (Transaction, error)
+	DeleteTx(context.Context) (Transaction, error)
 }
 
 type RawExecutor[E entity] interface {
@@ -43,18 +53,13 @@ type RawExecutor[E entity] interface {
 	Exec(sql string, values ...any) error
 }
 
-type Transactor[E entity] interface {
-	Begin() Entitier[E]
-	SetTx(Transaction) Entitier[E]
-	Commit() Entitier[E]
-}
-
 type entity interface {
 	TableName() string
 }
 
 type Transaction interface {
 	implement()
+	Commit() error
 }
 
 type transaction struct {
@@ -65,6 +70,10 @@ type transaction struct {
 }
 
 func (t *transaction) implement() {}
+
+func (t *transaction) Commit() error {
+	return t.tx.Commit().Error
+}
 
 type Entity[E entity] struct {
 	transaction *transaction
@@ -83,21 +92,12 @@ func SQL[E entity](ent E) Entitier[E] {
 }
 
 func (e *Entity[E]) Select(cols ...string) Entitier[E] {
-	if len(cols) > 1 {
-		e.transaction.scopes = append(
-			e.transaction.scopes,
-			func(db *gorm.DB) *gorm.DB {
-				return db.Select(cols)
-			},
-		)
-	} else {
-		e.transaction.scopes = append(
-			e.transaction.scopes,
-			func(db *gorm.DB) *gorm.DB {
-				return db.Select(cols[0], cols[1])
-			},
-		)
-	}
+	e.transaction.scopes = append(
+		e.transaction.scopes,
+		func(db *gorm.DB) *gorm.DB {
+			return db.Select(cols)
+		},
+	)
 
 	return e
 }
@@ -191,11 +191,14 @@ func (e *Entity[E]) IsMany() Entitier[E] {
 
 func (e *Entity[E]) ToSQL() []any {
 	var table string
+
 	if e.hasMany {
-		table = strings.Title(e.table.TableName())
+		title := cases.Title(language.English, cases.NoLower)
+		table = title.String(e.table.TableName())
 	} else {
 		table = reflect.ValueOf(e.table).Elem().Type().Name()
 	}
+
 	args := []any{table}
 
 	if len(e.clause.ToSQL()) > 1 {
@@ -205,7 +208,16 @@ func (e *Entity[E]) ToSQL() []any {
 	return args
 }
 
-func (e *Entity[E]) Join(args []any) Entitier[E] {
+func (e *Entity[E]) Join(arg any) Entitier[E] {
+	var args []any
+
+	if _, ok := arg.(*Clause); ok {
+		args = e.ToSQL()
+	} else {
+		v := newVar(arg).(entity)
+		args = SQL(v).ToSQL()
+	}
+
 	table := args[0].(string)
 
 	if len(args) > 1 {
@@ -213,6 +225,7 @@ func (e *Entity[E]) Join(args []any) Entitier[E] {
 		splited := strings.Split(query, " = ")
 
 		var splitedStmt []string
+
 		for _, s := range splited {
 			words := strings.Split(s, " ")
 			for _, word := range words {
@@ -229,10 +242,11 @@ func (e *Entity[E]) Join(args []any) Entitier[E] {
 		}
 
 		stmt := strings.Join(splitedStmt, " ")
+
 		e.transaction.scopes = append(
 			e.transaction.scopes,
 			func(db *gorm.DB) *gorm.DB {
-				return db.Joins(table, db.Where(stmt, args[2:]))
+				return db.Joins(table, db.Where(stmt, args[2:])) //nolint
 			},
 		)
 	} else {
@@ -250,7 +264,7 @@ func (e *Entity[E]) Join(args []any) Entitier[E] {
 func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 	result := make([]E, 0)
 
-	err := db.Scopes(e.transaction.scopes...).Find(&result).Error
+	err := db.WithContext(ctx).Scopes(e.transaction.scopes...).Find(&result).Error
 	if err != nil {
 		return nil, e.joinError(err)
 	}
@@ -261,7 +275,7 @@ func (e *Entity[E]) Find(ctx context.Context) ([]E, error) {
 func (e *Entity[E]) One(ctx context.Context) (E, error) {
 	var result E
 
-	err := db.Scopes(e.transaction.scopes...).Find(&result).Error
+	err := db.WithContext(ctx).Scopes(e.transaction.scopes...).First(&result).Error
 	if err != nil {
 		return result, e.joinError(err)
 	}
@@ -269,15 +283,73 @@ func (e *Entity[E]) One(ctx context.Context) (E, error) {
 	return result, nil
 }
 
-func (e *Entity[E]) Insert(ctx context.Context) (tx Transaction, err error) {
-	if e.transaction.tx != nil {
-		return e.txInsert(ctx)
+func (e *Entity[E]) Count(ctx context.Context) (int64, error) {
+	var count int64
+
+	err := db.WithContext(ctx).
+		Model(e.table).
+		Scopes(e.transaction.scopes...).
+		Count(&count).Error
+	if err != nil {
+		return -1, e.joinError(err)
 	}
 
-	return nil, db.Create(e.table).Error
+	return count, nil
 }
 
-func (e Entity[E]) txInsert(ctx context.Context) (tx Transaction, err error) {
+func (e *Entity[E]) Insert(ctx context.Context) error {
+	if e.transaction.tx == nil {
+		return db.WithContext(ctx).Create(e.table).Error
+	}
+
+	err := e.transaction.tx.WithContext(ctx).Create(e.table).Error
+	if err != nil {
+		_, rerr := e.rollback(err)
+		if rerr != nil {
+			return e.joinError(rerr)
+		}
+
+		return e.joinError(err)
+	}
+
+	if e.transaction.commit {
+		_, err := e.commit()
+		if err != nil {
+			return e.joinError(err)
+		}
+	}
+
+	return nil
+}
+
+func (e *Entity[E]) InsertBatch(ctx context.Context, entities []E) error {
+	if e.transaction.tx == nil {
+		return db.WithContext(ctx).CreateInBatches(entities, len(entities)).Error
+	}
+
+	err := e.transaction.tx.WithContext(ctx).CreateInBatches(entities, len(entities)).Error
+	if err != nil {
+		_, rerr := e.rollback(err)
+		if rerr != nil {
+			return e.joinError(rerr)
+		}
+
+		return e.joinError(err)
+	}
+
+	if e.transaction.commit {
+		_, err := e.commit()
+		if err != nil {
+			return e.joinError(err)
+		}
+	}
+
+	return nil
+}
+
+func (e *Entity[E]) InsertTx(ctx context.Context) (tx Transaction, err error) {
+	e.transaction.tx = db.WithContext(ctx).Begin()
+
 	err = e.transaction.tx.Create(e.table).Error
 	if err != nil {
 		return e.rollback(err)
@@ -286,54 +358,83 @@ func (e Entity[E]) txInsert(ctx context.Context) (tx Transaction, err error) {
 	return e.commit()
 }
 
-func (e *Entity[E]) Update(ctx context.Context) (tx Transaction, err error) {
-	if e.transaction.tx != nil {
-		return e.txUpdate(ctx)
+func (e *Entity[E]) Update(ctx context.Context) error {
+	if e.transaction.tx == nil {
+		return db.WithContext(ctx).Scopes(e.transaction.scopes...).Updates(e.table).Error
 	}
 
-	return nil, db.Scopes(e.transaction.scopes...).Updates(e.table).Error
-}
-
-func (e *Entity[E]) txUpdate(ctx context.Context) (tx Transaction, err error) {
-	err = e.transaction.tx.Scopes(e.transaction.scopes...).Updates(e.table).Error
+	err := e.transaction.tx.WithContext(ctx).
+		Scopes(e.transaction.scopes...).
+		Updates(e.table).Error
 	if err != nil {
-		return e.rollback(err)
+		_, rerr := e.rollback(err)
+		if rerr != nil {
+			return e.joinError(rerr)
+		}
+
+		return e.joinError(err)
 	}
 
-	return e.commit()
-}
-
-func (e *Entity[E]) Delete(ctx context.Context) (tx Transaction, err error) {
-	if e.transaction.tx != nil {
-		return e.txDelete(ctx)
+	if e.transaction.commit {
+		_, err := e.commit()
+		if err != nil {
+			return e.joinError(err)
+		}
 	}
 
-	return nil, db.Scopes(e.transaction.scopes...).Delete(e.table).Error
+	return nil
 }
 
-func (e *Entity[E]) txDelete(ctx context.Context) (tx Transaction, err error) {
-	err = e.transaction.tx.Scopes(e.transaction.scopes...).Delete(e.table).Error
-	if err != nil {
-		return e.rollback(err)
-	}
-
-	return e.commit()
-}
-
-func (e *Entity[E]) Begin() Entitier[E] {
+func (e *Entity[E]) UpdateTx(ctx context.Context) (tx Transaction, err error) {
 	e.transaction.tx = db.Begin()
 
-	return e
+	err = e.transaction.tx.WithContext(ctx).Scopes(e.transaction.scopes...).Updates(e.table).Error
+	if err != nil {
+		return e.rollback(err)
+	}
+
+	return e.commit()
 }
 
-func (e *Entity[E]) Commit() Entitier[E] {
-	e.transaction.commit = true
+func (e *Entity[E]) Delete(ctx context.Context) error {
+	if e.transaction.tx == nil {
+		return db.WithContext(ctx).Scopes(e.transaction.scopes...).Delete(e.table).Error
+	}
 
-	return e
+	err := e.transaction.tx.WithContext(ctx).Delete(e.table).Error
+	if err != nil {
+		_, rerr := e.rollback(err)
+		if rerr != nil {
+			return e.joinError(rerr)
+		}
+
+		return e.joinError(err)
+	}
+
+	if e.transaction.commit {
+		_, err := e.commit()
+		if err != nil {
+			return e.joinError(err)
+		}
+	}
+
+	return nil
 }
 
-func (e *Entity[E]) SetTx(tx Transaction) Entitier[E] {
+func (e *Entity[E]) DeleteTx(ctx context.Context) (tx Transaction, err error) {
+	e.transaction.tx = db.Begin()
+
+	err = e.transaction.tx.WithContext(ctx).Scopes(e.transaction.scopes...).Delete(e.table).Error
+	if err != nil {
+		return e.rollback(err)
+	}
+
+	return e.commit()
+}
+
+func (e *Entity[E]) SetTx(tx Transaction, commit bool) Entitier[E] {
 	e.transaction.tx = tx.(*transaction).tx
+	e.transaction.commit = commit
 
 	return e
 }
@@ -388,6 +489,7 @@ func (e *Entity[E]) rollback(err error) (Transaction, error) {
 	rErr := e.transaction.tx.Rollback().Error
 	if rErr != nil {
 		e.error = rErr
+
 		return nil, e.joinError(err)
 	}
 
@@ -402,4 +504,10 @@ func (e *Entity[E]) joinError(err error) error {
 	e.error = err
 
 	return e.error
+}
+
+func newVar(v any) any {
+	t := reflect.TypeOf(v)
+
+	return reflect.New(t.Elem()).Interface()
 }
